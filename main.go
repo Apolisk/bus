@@ -1,66 +1,98 @@
 package main
 
 import (
-	"encoding/json"
-	"net/http"
-	"os"
-
+	"fmt"
 	"github.com/gocolly/colly/v2"
+	"io"
+	"log"
+	"net/http"
+	"net/url"
+	"os"
+	"strings"
+	"sync"
+	"time"
 )
 
-type timetable struct {
-	Title string `json:"title"`
-	Link  string `json:"link"`
-}
-
 func main() {
-	if err := getTimetable("#u23501-89"); err != nil {
+	if err := getTimetable("tbody"); err != nil {
 		return
 	}
 }
 
-func getTimetable(id string) (err error) {
-
+func getTimetable(tag string) (err error) {
 	c := colly.NewCollector()
-
-	c.OnHTML(id, func(e *colly.HTMLElement) {
-		url := "https://obukhivtrans.com.ua/"
-		text := e.ChildTexts("h6")
+	c.OnHTML(tag, func(e *colly.HTMLElement) {
 		link := e.ChildAttrs("a", "href")
-
-		err = writeToFile(url, text, link)
+		err = writeToFile(link)
 		if err != nil {
 			return
 		}
 
 	})
-	err = c.Visit("https://obukhivtrans.com.ua/%d1%80%d0%be%d0%b7%d0%ba%d0%bb%d0%b0%d0%b4%d0%b8-%d1%80%d1%83%d1%85%d1%83.html")
+	err = c.Visit("http://obukhivtrans.com.ua/assets/")
 	if err != nil {
 		return err
 	}
 	return nil
 }
 
-func writeToFile(url string, text, link []string) (err error) {
-	file, err := os.Create("data.json")
+func writeToFile(link []string) (err error) {
+	var wg sync.WaitGroup
+	start := time.Now()
+	//for j := 0; j < runtime.NumCPU()/8; j++ {
+	for i := 5; i < len(link); i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			time.Sleep(time.Nanosecond)
+			filetype := link[i][len(link[i])-3:]
+			value := "http://obukhivtrans.com.ua/assets/" + link[i]
+			err = saveFile(filetype, value)
+			if err != nil {
+				log.Println(err)
+			}
+		}(i)
+	}
+	//}
+	wg.Wait()
+	fmt.Println(time.Now().Sub(start).Seconds())
+	return nil
+}
+
+func saveFile(filetype, value string) error {
+	switch filetype {
+	case "jpg":
+		err := getFile(value, "images")
+		if err != nil {
+			return err
+		}
+	case "pdf":
+		err := getFile(value, "pdf")
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func getFile(value, path string) error {
+	decodedValue, err := url.QueryUnescape(value)
 	if err != nil {
 		return err
 	}
-	for i := range text {
-		r, _ := http.Get(url + link[i])
-		if r.StatusCode == 404 {
-			link = append(link[:i], link[i+1:]...)
-		}
+	response, err := http.Get(decodedValue)
+	if err != nil || response.StatusCode != 404 {
+		return err
+	}
+	filename := decodedValue[strings.LastIndex(decodedValue, "/")+1:]
 
-		data, err := json.MarshalIndent(timetable{Title: text[i], Link: url + link[i]}, "", "  ")
-		if err != nil {
-			return err
-		}
-
-		_, err = file.Write(data)
-		if err != nil {
-			return err
-		}
+	file, err := os.Create(fmt.Sprintf("%v/%v", path, filename))
+	if err != nil {
+		return err
+	}
+	_, err = io.Copy(file, response.Body)
+	if err != nil {
+		return err
 	}
 	return nil
 }
